@@ -48,7 +48,7 @@ template<typename> class TGeneratorIterator;
  *  This object represents ownership of the coroutine, its destruction will
  *  cancel the coroutine. */
 template<typename T>
-struct [[nodiscard]] TGenerator
+struct [[nodiscard]] TGenerator : std::ranges::view_interface<TGenerator<T>>
 {
 	using promise_type = Private::TGeneratorPromise<T>;
 	using iterator = TGeneratorIterator<T>;
@@ -105,9 +105,14 @@ public:
 template<typename T>
 class TGeneratorIterator
 {
-	TGenerator<T>* Generator; // nullptr == end()
+	TGenerator<T>* Generator = nullptr; // nullptr == end()
 
 public:
+	using value_type = T;
+	using difference_type = std::ptrdiff_t;
+	
+	TGeneratorIterator() = default;
+	
 	/** Constructs an iterator wrapper over a generator coroutine. */
 	explicit TGeneratorIterator(TGenerator<T>& Generator) noexcept
 		: Generator(Generator ? &Generator : nullptr) { }
