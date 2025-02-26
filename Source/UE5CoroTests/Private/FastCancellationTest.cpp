@@ -142,6 +142,31 @@ void DoTest(FAutomationTestBase& Test)
 		Test.TestEqual(TEXT("Semaphore is still available"),
 		               FTestHelper::ReadSemaphore(Semaphore), 1);
 	}
+
+	{
+		FEventRef CoroToTest;
+		std::atomic<bool> bDone = false, bWrong = false;
+		auto Coro = World.Run(CORO
+		{
+			ON_SCOPE_EXIT { bDone = true; };
+			if constexpr (bMultithreaded)
+				co_await Async::MoveToTask();
+			CoroToTest->Trigger();
+			co_await Async::PlatformSeconds(10000);
+			bWrong = true;
+		});
+		World.EndTick();
+		CoroToTest->Wait();
+		for (int i = 0; i < 10; ++i)
+		{
+			Test.TestFalse(TEXT("Still active"), bDone);
+			World.Tick();
+		}
+		Coro.Cancel();
+		FTestHelper::PumpGameThread(World, [&] { return bDone.load(); });
+		Test.TestTrue(TEXT("Coroutine done"), Coro.IsDone());
+		Test.TestFalse(TEXT("Coroutine was canceled"), bWrong);
+	}
 }
 }
 
