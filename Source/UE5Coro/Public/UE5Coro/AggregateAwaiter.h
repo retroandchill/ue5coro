@@ -40,11 +40,20 @@
 namespace UE5Coro
 {
 /** co_awaits all parameters, returns an object that when co_awaited, resumes
- *  its own awaiting coroutine when the first one of the parameters finishes.
+ *  its own awaiting coroutine when any of the provided parameters finishes.
  *
  *  The result of the await expression is the index of the parameter that
  *  finished first. */
 auto WhenAny(TAwaitable auto&&...) -> Private::FAnyAwaiter;
+
+/** co_awaits all parameters in latent mode with the provided context, returns
+ *  an object that when co_awaited, resumes its own awaiting coroutine after any
+ *  of the provided parameters finishes.
+ *
+ *  The result of the await expression is the index of the parameter that
+ *  finished first. */
+auto WhenAnyLatent(TLatentContext<const UObject> LatentContext,
+                   TAwaitable auto&&...) -> Private::FLatentAnyAwaiter;
 
 /** Returns an object that when co_awaited, resumes its awaiting coroutine when
  *  any of the provided coroutines have completed.
@@ -73,6 +82,12 @@ auto Race(TCoroutine<T>... Args) -> Private::FRaceAwaiter;
 /** co_awaits all parameters, returns an object that when co_awaited resumes its
  *  awaiting coroutine once all of them have finished. */
 auto WhenAll(TAwaitable auto&&...) -> Private::FAllAwaiter;
+
+/** co_awaits all parameters in latent mode with the provided context, returns
+ *  an object that when co_awaited resumes its awaiting coroutine after all of
+ *  them have finished. */
+auto WhenAllLatent(TLatentContext<const UObject> LatentContext,
+                   TAwaitable auto&&...) -> Private::FLatentAwaiter;
 
 /** Returns an object that when co_awaited, resumes its awaiting coroutine once
  *  all the provided coroutines have finished. */
@@ -106,8 +121,8 @@ public:
 	explicit FAggregateAwaiter(int Count, TAwaitable auto&&... Awaiters)
 		: Data(std::make_shared<FData>(Count))
 	{
-		int Idx = 0;
-		(Consume(Data, Idx++, std::forward<decltype(Awaiters)>(Awaiters)), ...);
+		int i = 0;
+		(Consume(Data, i++, std::forward<decltype(Awaiters)>(Awaiters)), ...);
 	}
 
 	explicit FAggregateAwaiter(auto, const TArray<TCoroutine<>>& Coroutines);
@@ -152,12 +167,44 @@ public:
 	void Suspend(FPromise&);
 	int await_resume() noexcept;
 };
+
+struct UE5CORO_API FLatentAggregate final
+{
+	int RefCount;
+	int Remaining;
+	int First = -1;
+	TArray<TCoroutine<>> Handles;
+
+	explicit FLatentAggregate(TLatentContext<const UObject>, auto,
+	                          TAwaitable auto&&...);
+	TCoroutine<> ConsumeLatent(TLatentContext<const UObject>, int,
+	                           TAwaitable auto&&);
+	static bool ShouldResume(void*, bool);
+	void Release();
+};
+
+class [[nodiscard]] UE5CORO_API FLatentAnyAwaiter : public FLatentAwaiter
+{
+public:
+	explicit FLatentAnyAwaiter(auto&&...);
+	FLatentAnyAwaiter(FLatentAnyAwaiter&&) noexcept = default;
+	int await_resume();
+};
+static_assert(sizeof(FLatentAnyAwaiter) == sizeof(FLatentAwaiter));
 }
 
 auto UE5Coro::WhenAny(TAwaitable auto&&... Args) -> Private::FAnyAwaiter
 {
 	return Private::FAnyAwaiter(sizeof...(Args) ? 1 : 0,
 	                            std::forward<decltype(Args)>(Args)...);
+}
+
+auto UE5Coro::WhenAnyLatent(TLatentContext<const UObject> LatentContext,
+                            TAwaitable auto&&... Args)
+	-> Private::FLatentAnyAwaiter
+{
+	return Private::FLatentAnyAwaiter(LatentContext, std::false_type(),
+	                                  std::forward<decltype(Args)>(Args)...);
 }
 
 template<typename... T>
@@ -170,6 +217,14 @@ auto UE5Coro::WhenAll(TAwaitable auto&&... Args) -> Private::FAllAwaiter
 {
 	return Private::FAllAwaiter(sizeof...(Args),
 	                            std::forward<decltype(Args)>(Args)...);
+}
+
+auto UE5Coro::WhenAllLatent(TLatentContext<const UObject> LatentContext,
+                            TAwaitable auto&&... Args) -> Private::FLatentAwaiter
+{
+	return Private::FLatentAnyAwaiter( // Intentional object slicing
+		LatentContext, std::true_type(),
+		std::forward<decltype(Args)>(Args)...);
 }
 
 template<UE5Coro::TAwaitable T>
@@ -195,4 +250,60 @@ UE5Coro::TCoroutine<> UE5Coro::Private::FAggregateAwaiter::Consume(
 	auto TransformedAwaiter = Transform(std::forward<T>(Awaiter));
 	co_await std::move(TransformedAwaiter);
 }
+
+UE5Coro::Private::FLatentAggregate::FLatentAggregate(
+	TLatentContext<const UObject> LatentContext, auto All,
+	TAwaitable auto&&... Args)
+	: RefCount(sizeof...(Args) + 1), // N * ConsumeLatent + ShouldResume(true)
+	  Remaining(All.value ? sizeof...(Args) : sizeof...(Args) ? 1 : 0)
+{
+	int i = 0;
+	Handles.Reserve(sizeof...(Args));
+	(Handles.Add(
+		ConsumeLatent(LatentContext, i++, std::forward<decltype(Args)>(Args))),
+	...);
+}
+
+template<UE5Coro::TAwaitable T>
+UE5Coro::TCoroutine<> UE5Coro::Private::FLatentAggregate::ConsumeLatent(
+	TLatentContext<const UObject>, int Index, T&& Awaiter)
+{
+	ON_SCOPE_EXIT // Handle both success and cancellation
+	{
+#if PLATFORM_EXCEPTIONS_DISABLED
+		checkf(IsInGameThread(),
+		       TEXT("Internal error: expected completion on the game thread"));
+#else
+		if (!IsInGameThread())
+		{
+			checkf(std::uncaught_exceptions(),
+			       TEXT("Internal error: expected stack unwinding off the GT"));
+			AsyncTask(ENamedThreads::GameThread, [this, Index]
+			{
+				if (--Remaining == 0)
+					First = Index;
+				Release();
+			});
+			return;
+		}
+#endif
+		if (--Remaining == 0)
+			First = Index;
+		Release();
+	};
+
+	TAwaitTransform<FLatentPromise, std::remove_cvref_t<T>> Transform;
+	// Extend the awaiter's life, in case Transform was a reference passthrough
+	auto TransformedAwaiter = Transform(std::forward<T>(Awaiter));
+	co_await std::move(TransformedAwaiter);
+	if (!IsInGameThread())
+		co_await Async::MoveToGameThread();
+}
+
+UE5Coro::Private::FLatentAnyAwaiter::FLatentAnyAwaiter(auto&&... Args)
+	: FLatentAwaiter(new FLatentAggregate(std::forward<decltype(Args)>(Args)...),
+	                 &FLatentAggregate::ShouldResume, std::false_type())
+{
+}
+
 #pragma endregion
