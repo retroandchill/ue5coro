@@ -98,13 +98,15 @@ UE5CORO_API auto WhenAll(const TArray<TCoroutine<>>&) -> Private::FAllAwaiter;
 namespace UE5Coro::Private
 {
 class [[nodiscard]] UE5CORO_API FAggregateAwaiter
-	: public TAwaiter<FAggregateAwaiter>
+	: public TCancelableAwaiter<FAggregateAwaiter>
 {
 	struct FData
 	{
 		UE::FMutex Lock;
+		bool bCanceled = false;
 		int Count;
 		int Index = -1;
+		TArray<TCoroutine<>> Handles;
 		FPromise* Promise = nullptr;
 
 		explicit FData(int Count) : Count(Count) { }
@@ -113,16 +115,18 @@ class [[nodiscard]] UE5CORO_API FAggregateAwaiter
 	std::shared_ptr<FData> Data;
 
 	static TCoroutine<> Consume(std::shared_ptr<FData>, int, TAwaitable auto&&);
+	static void Cancel(void*, FPromise&);
 
 protected:
 	int GetResumerIndex() const;
 
 public:
 	explicit FAggregateAwaiter(int Count, TAwaitable auto&&... Awaiters)
-		: Data(std::make_shared<FData>(Count))
+		: TCancelableAwaiter(&Cancel), Data(std::make_shared<FData>(Count))
 	{
 		int i = 0;
-		(Consume(Data, i++, std::forward<decltype(Awaiters)>(Awaiters)), ...);
+		(Data->Handles.Add(Consume(Data, i++,
+			std::forward<decltype(Awaiters)>(Awaiters))), ...);
 	}
 
 	explicit FAggregateAwaiter(auto, const TArray<TCoroutine<>>& Coroutines);
@@ -131,7 +135,7 @@ public:
 	void Suspend(FPromise&);
 };
 
-class [[nodiscard]] FAnyAwaiter : public FAggregateAwaiter
+class [[nodiscard]] FAnyAwaiter final : public FAggregateAwaiter
 {
 public:
 	explicit FAnyAwaiter(auto&&... Args)
@@ -139,7 +143,7 @@ public:
 	int await_resume() { return GetResumerIndex(); }
 };
 
-class [[nodiscard]] FAllAwaiter : public FAggregateAwaiter
+class [[nodiscard]] FAllAwaiter final : public FAggregateAwaiter
 {
 public:
 	explicit FAllAwaiter(auto&&... Args)
@@ -240,8 +244,8 @@ UE5Coro::TCoroutine<> UE5Coro::Private::FAggregateAwaiter::Consume(
 		auto* Promise = Data->Promise;
 		Lock.Unlock();
 
-		// Not co_awaited yet if this is nullptr, await_ready deals with this
-		if (Promise != nullptr)
+		// Not co_awaited yet if Promise is nullptr, await_ready deals with this
+		if (Promise != nullptr && Promise->UnregisterCancelableAwaiter<true>())
 			Promise->Resume();
 	};
 
