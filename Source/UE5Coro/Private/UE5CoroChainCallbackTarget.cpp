@@ -30,6 +30,8 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "UE5CoroChainCallbackTarget.h"
+
+#include "Engine/World.h"
 #include "UE5Coro/UE5CoroSubsystem.h"
 
 using namespace UE5Coro::Private;

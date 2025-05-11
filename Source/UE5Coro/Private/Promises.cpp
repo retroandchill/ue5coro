@@ -31,6 +31,7 @@
 
 #include "LatentActions.h"
 #include "LatentExitReason.h"
+#include "Async/Async.h"
 #include "UE5Coro/LatentAwaiter.h"
 #include "UE5Coro/Promise.h"
 

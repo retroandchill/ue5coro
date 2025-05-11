@@ -32,11 +32,16 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Tickable.h"
 #include "UE5Coro/Definition.h"
 #include <optional>
 #include <variant>
 #include "UE5Coro/Promise.h"
 #include "UE5CoroAnimCallbackTarget.generated.h"
+
+class UAnimMontage;
+struct FBranchingPointNotifyPayload;
+class UAnimInstance;
 
 UCLASS(Hidden, MinimalAPI)
 class UUE5CoroAnimCallbackTarget final : public UObject,

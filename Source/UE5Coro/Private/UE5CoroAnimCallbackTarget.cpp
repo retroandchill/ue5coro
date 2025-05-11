@@ -30,6 +30,8 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "UE5CoroAnimCallbackTarget.h"
+
+#include "Animation/AnimMontage.h"
 #include "UE5Coro/AnimationAwaiter.h"
 
 using namespace UE5Coro::Private;

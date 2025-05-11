@@ -32,6 +32,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/Event.h"
 #include "UE5Coro/Definition.h"
 #include <coroutine>
 #include <functional>

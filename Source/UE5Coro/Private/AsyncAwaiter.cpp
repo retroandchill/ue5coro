@@ -31,6 +31,7 @@
 
 #include "UE5Coro/AsyncAwaiter.h"
 #include "TimerThread.h"
+#include "Async/Async.h"
 
 using namespace UE5Coro::Private;
 

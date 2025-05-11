@@ -32,6 +32,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Async/Mutex.h"
+#include "HAL/Thread.h"
 #include "UE5Coro/Definition.h"
 #include <mutex>
 #include "UE5Coro/Private.h"
